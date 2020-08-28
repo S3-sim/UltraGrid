@@ -108,7 +108,7 @@ srt_video_rxtx::srt_video_rxtx(map<string, param_u> const &params) :
                 LOG(LOG_LEVEL_VERBOSE) << MOD_NAME << "Trying to connect to ourselves.\n";
                 int rc = srt_connect(m_socket_rx, (struct sockaddr *) &sa, sizeof sa);
                 assert(rc >= 0);
-        } else {
+        } else if (caller != SRT_LOOPBACK) { // calller only
                 m_socket_rx = create_socket();
                 m_caller_thread = thread(&srt_video_rxtx::connect, this, caller, tx_port);
         }
@@ -141,20 +141,33 @@ void srt_video_rxtx::listen()
 
 void srt_video_rxtx::connect(string receiver, uint16_t tx_port)
 {
-        sockaddr_in sa{};
-        sa.sin_family = AF_INET;
-        sa.sin_port = htons(tx_port);
-        inet_aton(receiver.c_str(), &sa.sin_addr);
+        LOG(LOG_LEVEL_VERBOSE) << MOD_NAME << "Connecting to: " << receiver << ":" << tx_port << "\n";
+        bool connected = false;
 
-        while (!m_should_exit) {
-                int rc = srt_connect(m_socket_rx, (struct sockaddr *) &sa, sizeof sa);
-                if (rc >= 0) {
-                        m_socket_tx = m_socket_rx;
+        while (!m_should_exit && !connected) {
+                struct addrinfo hints{};
+                struct addrinfo *res0{nullptr};
+                hints.ai_family = AF_INET;
+                hints.ai_socktype = SOCK_DGRAM;
+                string port_str = to_string(tx_port);
+                if (getaddrinfo(receiver.c_str(), port_str.c_str(), &hints, &res0) != 0) {
+                        LOG(LOG_LEVEL_ERROR) << MOD_NAME << "Unable to resolve: " << receiver << "!\n";
                         break;
                 }
-                m_connected_cv.notify_one();
-                LOG(LOG_LEVEL_ERROR) << MOD_NAME << "Unable to connect!\n";
-                fprintf(stderr, ".");
+
+                for (struct addrinfo *res = res0; res != nullptr; res = res->ai_next) {
+                        int rc = srt_connect(m_socket_rx, res->ai_addr, res->ai_addrlen);
+                        if (rc >= 0) {
+                                m_socket_tx = m_socket_rx;
+                                m_connected_cv.notify_one();
+                                connected = true;
+                        }
+                }
+                if (connected) {
+                        LOG(LOG_LEVEL_NOTICE) << MOD_NAME << "Connected to: " << receiver << ".\n";
+                } else {
+                        LOG(LOG_LEVEL_ERROR) << MOD_NAME << "Unable to connect!\n";
+                }
         }
 }
 
@@ -179,7 +192,7 @@ void srt_video_rxtx::receiver_loop()
 {
         {
                 unique_lock<mutex> _(m_lock);
-                m_connected_cv.wait(_, [&]{ return m_should_exit || m_socket_rx != 0; });
+                m_connected_cv.wait(_, [&]{ return m_should_exit || m_socket_tx != 0; });
         }
 
         while (!m_should_exit) {

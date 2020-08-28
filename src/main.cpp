@@ -1138,8 +1138,11 @@ int main(int argc, char *argv[])
                 }
         }
 
-        if (argc == 0 && strcasecmp(video_protocol, "srt") == 0) {
-                requested_receiver = SRT_LOOPBACK.data();
+        if (strcasecmp(video_protocol, "srt") == 0) {
+                video_rx_port = video_tx_port = port_base;
+                if (argc == 0) {
+                        requested_receiver = SRT_LOOPBACK.data();
+                }
         }
 
         if (strcmp("none", audio_recv) != 0) {
